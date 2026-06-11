@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <link rel="manifest" href="manifest.json">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>Car Seat Dashboard</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+      user-select: none;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    html, body {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;            /* no scrolling at all */
+      background: #1e2a2e;
+      font-family: 'Segoe UI', Roboto, sans-serif;
+    }
+
+    .dashboard {
+      width: 100%;
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 1rem;
+    }
+
+    .info {
+      text-align: center;
+      margin-bottom: 1.5rem;
+      color: #ecf0f1;
+    }
+
+    .info h1 {
+      font-size: 1.8rem;
+      letter-spacing: 2px;
+    }
+
+    .connection-status {
+      margin-top: 0.5rem;
+      font-size: 0.9rem;
+      background: #2c3e50;
+      display: inline-block;
+      padding: 0.3rem 1rem;
+      border-radius: 40px;
+    }
+
+    /* Two rows of 4 seats each – uses CSS Grid, no scroll */
+    .seat-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(100px, 140px));
+      gap: 1rem;
+      justify-content: center;
+      align-items: center;
+      margin-bottom: 1rem;
+    }
+
+    /* Each seat card */
+    .seat-card {
+      background: #2c3e50;
+      border-radius: 20px;
+      padding: 0.8rem 0.5rem;
+      text-align: center;
+      box-shadow: 0 6px 12px rgba(0,0,0,0.3);
+    }
+
+    .seat-label {
+      font-size: 1.3rem;
+      font-weight: bold;
+      color: #f1c40f;
+      margin-bottom: 0.4rem;
+    }
+
+    .seat-img {
+      width: 70px;
+      height: 70px;
+      margin: 0 auto;
+    }
+
+    .seat-img img {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+    }
+
+    .belt-notch {
+      margin-top: 10px;
+      font-size: 0.9rem;
+      font-weight: bold;
+      padding: 5px 0;
+      border-radius: 30px;
+      background: #1e2a2e;
+    }
+
+    .belt-connected {
+      color: #2ecc71;
+      background: #14532d;
+    }
+
+    .belt-disconnected {
+      color: #e74c3c;
+      background: #4a1c18;
+    }
+
+    .connect-btn {
+      margin-top: 1.5rem;
+      background: #3498db;
+      border: none;
+      font-size: 1.1rem;
+      font-weight: bold;
+      padding: 10px 24px;
+      border-radius: 50px;
+      color: white;
+      cursor: pointer;
+      transition: 0.2s;
+    }
+
+    .connect-btn:active {
+      transform: scale(0.97);
+    }
+
+    /* For very small screens, shrink cards a bit */
+    @media (max-width: 650px) {
+      .seat-grid {
+        grid-template-columns: repeat(4, minmax(85px, 110px));
+        gap: 0.6rem;
+      }
+      .seat-img {
+        width: 55px;
+        height: 55px;
+      }
+      .belt-notch {
+        font-size: 0.7rem;
+      }
+      .seat-label {
+        font-size: 1rem;
+      }
+    }
+  </style>
+</head>
+<body>
+<div class="dashboard">
+  <div class="info">
+    <h1>🚗 SEAT DASHBOARD</h1>
+    <div id="btStatus" class="connection-status">⚡ Not connected</div>
+  </div>
+
+  <!-- Grid will be filled with 8 seats (two rows of 4) -->
+  <div class="seat-grid" id="seatGrid"></div>
+
+  <button id="connectBtn" class="connect-btn">🔗 CONNECT BLUETOOTH</button>
+</div>
+
+<script>
+  // ========================
+  // DOM elements
+  // ========================
+  const seatGrid = document.getElementById('seatGrid');
+  const btStatusDiv = document.getElementById('btStatus');
+  const connectBtn = document.getElementById('connectBtn');
+
+  // ========================
+  // Seat definitions (S1 to S8)
+  // ========================
+  const SEATS = ['S1', 'S2', 'S3', 'S4', 'S5', 'S6', 'S7', 'S8'];
+
+  // Initial state: all seats empty, belt off
+  let seatData = {
+    S1: { occupied: false, belt: false },
+    S2: { occupied: false, belt: false },
+    S3: { occupied: false, belt: false },
+    S4: { occupied: false, belt: false },
+    S5: { occupied: false, belt: false },
+    S6: { occupied: false, belt: false },
+    S7: { occupied: false, belt: false },
+    S8: { occupied: false, belt: false }
+  };
+
+  // BLE globals
+  let device = null;
+  let characteristic = null;
+  let notificationActive = false;
+
+  // ========================
+  // Render dashboard (8 seats)
+  // ========================
+  function renderDashboard() {
+    if (!seatGrid) return;
+    let html = '';
+    for (let seatId of SEATS) {
+      const data = seatData[seatId];
+      const isOccupied = data.occupied;
+      const isBeltOn = data.belt;
+
+      const seatImgSrc = isOccupied ? 'images/seat_green.png' : 'images/seat_red.png';
+
+      let beltClass = 'belt-disconnected';
+      let beltText = '❌ BELT OFF';
+      if (isOccupied) {
+        if (isBeltOn) {
+          beltClass = 'belt-connected';
+          beltText = '✅ BELT ON';
+        } else {
+          beltClass = 'belt-disconnected';
+          beltText = '⚠️ BELT OFF';
+        }
+      } else {
+        beltText = '🟤 EMPTY';
+        beltClass = 'belt-disconnected';
+      }
+
+      html += `
+        <div class="seat-card">
+          <div class="seat-label">${seatId}</div>
+          <div class="seat-img">
+            <img src="${seatImgSrc}" alt="seat status">
+          </div>
+          <div class="belt-notch ${beltClass}">
+            ${beltText}
+          </div>
+        </div>
+      `;
+    }
+    seatGrid.innerHTML = html;
+  }
+
+  // ========================
+  // Parse incoming BLE string (e.g., '[["S1",1,1],...]')
+  // ========================
+  function parseAndUpdateSeats(rawString) {
+    try {
+      let parsedArray = JSON.parse(rawString);
+      if (!Array.isArray(parsedArray)) return;
+
+      const newSeatData = { ...seatData };
+      for (let item of parsedArray) {
+        if (!Array.isArray(item) || item.length < 3) continue;
+        const seatId = item[0];
+        const occupied = (item[1] === 1);
+        const belt = (item[2] === 1);
+        if (newSeatData.hasOwnProperty(seatId)) {
+          newSeatData[seatId] = { occupied, belt };
+        }
+      }
+      seatData = newSeatData;
+      renderDashboard();
+    } catch (err) {
+      console.error('Parse error:', err, rawString);
+    }
+  }
+
+  // ========================
+  // Handle incoming notification
+  // ========================
+  function handleNotification(event) {
+    const value = event.target.value;
+    if (!value) return;
+    const decoder = new TextDecoder('utf-8');
+    const rawString = decoder.decode(value);
+    parseAndUpdateSeats(rawString);
+  }
+
+  // ========================
+  // Connect to ESP32 BLE
+  // ========================
+  async function connectToBluetooth() {
+    if (!navigator.bluetooth) {
+        btStatusDiv.innerText = '❌ Web Bluetooth not supported! Use Chrome on Android.';
+        return;
+    }
+
+    try {
+        btStatusDiv.innerText = '🔍 Scanning for ESP32...';
+
+        // Use device name filter instead of service UUID
+        const deviceRequest = await navigator.bluetooth.requestDevice({
+            filters: [{ name: 'ESP32_SENSOR_DATA' }],
+            optionalServices: ['12345678-1234-1234-1234-123456789abc']
+        });
+
+        device = deviceRequest;
+        btStatusDiv.innerText = `✅ Connected to ${device.name || 'ESP32'}`;
+
+        const server = await device.gatt.connect();
+        const service = await server.getPrimaryService('12345678-1234-1234-1234-123456789abc');
+        characteristic = await service.getCharacteristic('abcdefab-1234-5678-1234-abcdefabcdef');
+
+        await characteristic.startNotifications();
+        characteristic.addEventListener('characteristicvaluechanged', handleNotification);
+        notificationActive = true;
+
+        btStatusDiv.innerText = `📡 Receiving data from ${device.name || 'ESP32'}`;
+        connectBtn.innerText = '🔌 Connected';
+        connectBtn.disabled = true;
+        connectBtn.style.opacity = '0.6';
+
+        // Read initial value once
+        const initialValue = await characteristic.readValue();
+        const decoder = new TextDecoder('utf-8');
+        const initString = decoder.decode(initialValue);
+        if (initString) parseAndUpdateSeats(initString);
+
+    } catch (error) {
+        console.error(error);
+        btStatusDiv.innerText = '⚠️ Connection failed. Retry.';
+        connectBtn.disabled = false;
+        connectBtn.style.opacity = '1';
+        if (error.message.includes('User cancelled')) {
+            btStatusDiv.innerText = '🔘 Cancelled by user';
+        }
+    }
+}
+
+  function disconnectFromBluetooth() {
+    if (device && device.gatt.connected) {
+      if (characteristic && notificationActive) {
+        characteristic.removeEventListener('characteristicvaluechanged', handleNotification);
+        characteristic.stopNotifications().catch(e => console.warn);
+      }
+      device.gatt.disconnect();
+    }
+    device = null;
+    characteristic = null;
+    notificationActive = false;
+    btStatusDiv.innerText = '⚡ Not connected';
+    connectBtn.innerText = '🔗 CONNECT BLUETOOTH';
+    connectBtn.disabled = false;
+    connectBtn.style.opacity = '1';
+  }
+
+  connectBtn.addEventListener('click', () => {
+    if (device && device.gatt.connected) {
+      disconnectFromBluetooth();
+    } else {
+      connectToBluetooth();
+    }
+  });
+
+  // Initial render (all red seats)
+  renderDashboard();
+</script>
+
+<script>
+if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('service-worker.js')
+    .then(() => {
+        console.log('Service Worker Registered');
+    })
+    .catch(err => {
+        console.log('Service Worker Error:', err);
+    });
+}
+</script>
+
+</body>
+</html>
